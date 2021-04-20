@@ -320,8 +320,6 @@ def main():
     lb = createLoadBalancer()
 
 
-
-
 if sys.version_info[0] >= 3 and sys.version_info[1] >= 7:
     main()
 else:
