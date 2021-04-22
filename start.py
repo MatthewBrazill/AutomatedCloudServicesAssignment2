@@ -2,6 +2,7 @@
 
 # Imports
 import os
+import re
 import boto3
 import logging
 import sys
@@ -24,7 +25,7 @@ logging.basicConfig(
 
 
 # Definitions
-def createKeyPair(name: str, id: str):
+def createKeyPair(name: str, id: str, dry=False):
     """
     Creates an EC2 Key Pair and saves it as a file accessable to the user.
 
@@ -37,6 +38,7 @@ def createKeyPair(name: str, id: str):
     logging.info("Creating Key Pair...")
     key = ec2.create_key_pair(
         KeyName=f"{name}-key",
+        DryRun=dry,
         TagSpecifications=[
             {
                 "ResourceType": "key-pair",
@@ -59,7 +61,7 @@ def createKeyPair(name: str, id: str):
     return key
 
 
-def createVpc(name: str, id: str, cidr: str, dry: bool) -> object:
+def createVpc(name: str, id: str, cidr: str, dry=False) -> object:
     """
     The function creates a VPC and names it as specified.
 
@@ -96,7 +98,7 @@ def createVpc(name: str, id: str, cidr: str, dry: bool) -> object:
     return vpc
 
 
-def createGateway(name: str, id: str, vpc: object, dry: bool):
+def createGateway(name: str, id: str, vpc: object, dry=False):
     """
     The function creates a Internet Gateway, names it as specified 
     and then attaches it to the given VPC.
@@ -111,8 +113,7 @@ def createGateway(name: str, id: str, vpc: object, dry: bool):
         Whether or not to run as a dry run.
     """
 
-    # TODO
-    gateway = ec2.create_internet_gatway(
+    gateway = ec2.create_internet_gateway(
         DryRun=dry,
         TagSpecifications=[
             {
@@ -139,7 +140,7 @@ def createGateway(name: str, id: str, vpc: object, dry: bool):
     return gateway
 
 
-def createSubnets(name: str, id: str, vpc: object, dry: bool):
+def createSubnets(name: str, id: str, vpc: object, dry=False):
     """
     The function creates Subnets and names them as specified.
 
@@ -158,10 +159,12 @@ def createSubnets(name: str, id: str, vpc: object, dry: bool):
     # A for loop to create 6 Subnets, a private and a public subnet in all
     # three Avalability Zones
     logging.info("Creating Subnets")
-    subnets = []
+    cidrStart = re.sub(r'([.]\d+){2}([/]\d+){1}', '', vpc.cidr_block)
+    subnets = [None] * 6
     for i in range(3):
         subnets[i] = vpc.create_subnet(
-            AvalabilityZoneId=f"euw1-az{i+1}",
+            AvailabilityZoneId=f"euw1-az{i+1}",
+            CidrBlock=f"{cidrStart}.{i+1}.0/24",
             DryRun=dry,
             TagSpecifications=[
                 {
@@ -181,7 +184,8 @@ def createSubnets(name: str, id: str, vpc: object, dry: bool):
         )
 
         subnets[i+3] = vpc.create_subnet(
-            AvalabilityZone=f"euw1-az{i+1}",
+            AvailabilityZoneId=f"euw1-az{i+1}",
+            CidrBlock=f"{cidrStart}.{i+4}.0/24",
             DryRun=dry,
             TagSpecifications=[
                 {
@@ -202,7 +206,7 @@ def createSubnets(name: str, id: str, vpc: object, dry: bool):
     return subnets
 
 
-def createSecurityGroups(name: str, id: str, vpc: object, dry: bool):
+def createSecurityGroups(name: str, id: str, vpc: object, dry=False):
     """
     The function creates a Security Group and names it as specified.
 
@@ -225,6 +229,10 @@ def createSecurityGroups(name: str, id: str, vpc: object, dry: bool):
             {
                     "ResourceType": "security-group",
                     "Tags": [
+                        {
+                            "Key": "Name",
+                            "Value": f"{name}-security"
+                        },
                         {
                             "Key": "ID",
                             "Value": id
@@ -286,7 +294,7 @@ def createLoadBalancer():
     return lb
 
 
-def createAmazonMachineImage(name: str, id: str, key: object, vpc: object, script: str, dry: bool):
+def createAmazonMachineImage(name: str, id: str, key: object, vpc: object, script: str, dry=False):
     """
     This function creates a AMI based of off a EC2 instance that is created
     and then terminated.
@@ -376,20 +384,20 @@ def main():
     logging.info(f"App name set to: {APP_NAME}")
     logging.info(f"ID generated as: {CREATION_ID}")
 
-    script = open(f"./scripts/startupScript.sh", "r").read()
-    logging.info("Script loaded from file: ./scripts/startupScript.sh")
+    script = open(f"./scripts/startup.sh", "r").read()
+    logging.info("Script loaded from file: ./scripts/startup.sh")
 
-    key = createKeyPair()
+    #key = createKeyPair(APP_NAME, CREATION_ID, True)
 
     vpc = createVpc(APP_NAME, CREATION_ID, "10.0.0.0/16")
     createGateway(APP_NAME, CREATION_ID, vpc)
     createSubnets(APP_NAME, CREATION_ID, vpc)
     createSecurityGroups(APP_NAME, CREATION_ID, vpc)
 
-    image = createAmazonMachineImage(APP_NAME, CREATION_ID, key, vpc, script)
+    #image = createAmazonMachineImage(APP_NAME, CREATION_ID, key, vpc, script, True)
 
 
-    lb = createLoadBalancer()
+    #lb = createLoadBalancer()
 
 
 if sys.version_info[0] >= 3 and sys.version_info[1] >= 7:
