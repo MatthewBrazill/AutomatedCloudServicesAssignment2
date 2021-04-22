@@ -1,7 +1,7 @@
 {
-  "name": "acs_demo_webapp",
+  "name": "acs_demo_webserver",
   "version": "1.0.0",
-  "description": "A small demo webapp to highlight features of the ACS assignment.",
+  "description": "A small demo webserver to highlight features of the ACS assignment.",
   "main": "server.js",
   "dependencies": {
     "body-parser": "^1.19.0",

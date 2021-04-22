@@ -1,11 +1,12 @@
 #! /usr/bin/env python3
 
 # Imports
-import os
+import subprocess
 import re
 import boto3
 import logging
 import sys
+import os
 import uuid
 
 # Global Resources
@@ -348,7 +349,12 @@ def createAmazonMachineImage(name: str, id: str, key: object, vpc: object, scrip
         ]
     )[0]
 
+    # Wait for the server to be running and 
+    # then install the webserver.
     instance.wait_until_running()
+    installWebServer(key, instance)
+
+    # Stop the instance to create the AMI.
     instance.stop()
     instance.wait_until_stopped()
 
@@ -378,6 +384,54 @@ def createAmazonMachineImage(name: str, id: str, key: object, vpc: object, scrip
     return image
 
 
+def installWebServer(key, instance):
+    """
+    """
+
+    logging.info("Installing Web Server...")
+
+    if subprocess.run([
+        "./scripts/install.sh",
+        f"./{key.key_name}.pem",
+        instance.public_ip_address
+    ]).returncode == 0:
+        logging.info("Successfully Installed")
+
+    return
+
+
+def createS3(name: str, id: str):
+    """
+    The function creates an S3 bucket to make resources 
+    better available for the web server 
+
+    name -> String:
+        The name to be given to the AMI.
+    id -> String:
+        The ID with which to identify all resources.
+    """
+
+    logging.info("Creating S3 Bucket")
+    bucket = s3.create_bucket(
+        Bucket=f"{name}-storage",
+        CreateBucketConfiguration={
+            "LocationConstraint": "eu-west-1"
+        }
+    )
+
+    for root, dirs, files in os.walk("./webserver"):
+        if "node_modules" not in root:
+            for file in files:
+                path = os.path.join(root, file)
+                bucket.upload_file(
+                    path,
+                    path[2:],
+                    ExtraArgs={'ACL': 'public-read'}
+                )
+    
+    return bucket
+
+
 # Main
 def main():
     logging.info("Starting Program...")
@@ -394,8 +448,9 @@ def main():
     createSubnets(APP_NAME, CREATION_ID, vpc)
     createSecurityGroups(APP_NAME, CREATION_ID, vpc)
 
-    #image = createAmazonMachineImage(APP_NAME, CREATION_ID, key, vpc, script, True)
+    bucket = createS3(APP_NAME, CREATION_ID)
 
+    #image = createAmazonMachineImage(APP_NAME, CREATION_ID, key, vpc, script, True)
 
     #lb = createLoadBalancer()
 

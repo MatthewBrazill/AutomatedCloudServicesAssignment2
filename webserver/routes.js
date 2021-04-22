@@ -17,7 +17,7 @@ router.get("/index", function (req, res) {
 
 router.get("/monitoring", function (req, res) {
     res.render("monitoring", {
-        title: "WebApp Monitoring",
+        title: "WebServer Monitoring",
         img_link: "",
         instance_ip: "",
         instance_type: "",

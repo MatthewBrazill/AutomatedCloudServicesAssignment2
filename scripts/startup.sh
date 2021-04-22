@@ -2,5 +2,4 @@
 
 yum update
 yum install httpd -y
-systemctl enable httpd
-systemctl start httpd
+yum install nodejs -y
