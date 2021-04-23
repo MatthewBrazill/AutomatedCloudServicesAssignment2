@@ -7,6 +7,7 @@ import logging
 import sys
 import os
 import uuid
+import subprocess
 
 # Global Resources
 APP_NAME = "acs-assignment"
@@ -137,7 +138,7 @@ def createRouteTable(name: str, id: str, vpc: object, dry=False):
     )
 
     rt.create_route(
-        DestinationCidr="0.0.0.0/0",
+        DestinationCidrBlock="0.0.0.0/0",
         GatewayId=gateId,
         DryRun=dry
     )
@@ -394,9 +395,11 @@ def createAmazonMachineImage(name: str, id: str, key: object, vpc: object, scrip
         ]
     )[0]
 
-    # Wait for the server to be running and then
-    # stop the instance to create the AMI.
+    # Wait for the server to be running to install the server
     instance.wait_until_running()
+    subprocess.run(["./scripts/install.sh", f"{key.key_name}.pem", instance.public_ip_address])
+
+    # Stop the instance to create the AMI.
     instance.stop()
     instance.wait_until_stopped()
 
@@ -425,40 +428,6 @@ def createAmazonMachineImage(name: str, id: str, key: object, vpc: object, scrip
 
     logging.info("Created AMI")
     return image
-
-
-def createS3(name: str, id: str):
-    """
-    The function creates an S3 bucket to make resources 
-    better available for the web server 
-
-    name -> String:
-        The name to be given to the AMI.
-    id -> String:
-        The ID with which to identify all resources.
-    """
-
-    logging.info("Creating S3 Bucket...")
-    bucket = s3.create_bucket(
-        Bucket=f"{name}-storage",
-        CreateBucketConfiguration={
-            "LocationConstraint": "eu-west-1"
-        }
-    )
-
-    logging.info("Uploading Files to Bucket...")
-    for root, dirs, files in os.walk("./webserver"):
-        if "node_modules" not in root:
-            for file in files:
-                path = os.path.join(root, file)
-                bucket.upload_file(
-                    path,
-                    path[2:],
-                    ExtraArgs={"ACL": "public-read"}
-                )
-    logging.info(f"Created S3 Bucket as '{bucket.name}'")
-
-    return bucket
 
 
 def createAutoScaler(name: str, id: str, vpc: object, launchConfig: str, loadBalancer: str, dry=False):
@@ -526,11 +495,11 @@ def createLoadBalancer(name: str, id: str, vpc: object, dry=False):
         ]
     )["DNSName"]
     logging.info(f"Created Load Balancer: {dns}")
-    print(f"Address: {dns}")
+    print(f"Address: http://{dns}/index")
     return loadBalancer
 
 
-def createLaunchConfig(name: str, id: str, key: object, vpc: object, image: object, dry=False):
+def createLaunchConfig(name: str, id: str, key: object, vpc: object, image: object, script, dry=False):
     """
     """
 
@@ -544,6 +513,7 @@ def createLaunchConfig(name: str, id: str, key: object, vpc: object, image: obje
         LaunchConfigurationName=launchConfig,
         ImageId=image.image_id,
         KeyName=key.key_name,
+        UserData=script,
         SecurityGroups=[sgId],
         InstanceType="t2.nano"
     )
@@ -638,10 +608,6 @@ def main():
         createSubnets(APP_NAME, CREATION_ID, vpc)
         createSecurityGroups(APP_NAME, CREATION_ID, vpc)
 
-        # Create a S3 Bucket to provide a place to resources
-        # for the web app.
-        bucket = createS3(APP_NAME, CREATION_ID)
-
         # Build a EC2 Instance to generate a AMI based on it,
         # including all necessary configuration.
         amiScript = re.sub("[bucket]", bucket.name, open(f"./scripts/ami.sh", "r").read())
@@ -668,6 +634,6 @@ if sys.version_info[0] >= 3 and sys.version_info[1] >= 7:
 else:
     logging.error("Python version out of date!")
     print(
-        "You're Python version can't run this script.\nPlease make sure " +
+        "Your Python version can't run this script.\nPlease make sure " +
         "you're updated to Python 3.7 or newer."
     )
