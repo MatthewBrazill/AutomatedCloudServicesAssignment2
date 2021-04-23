@@ -100,6 +100,52 @@ def createVpc(name: str, id: str, cidr: str, dry=False) -> object:
     return vpc
 
 
+def createRouteTable(name: str, id: str, vpc: object, dry=False):
+    """
+    Creates a route table for the specified VPC.
+
+    name -> String:
+        The name to be given to the route table. 
+    id -> String:
+        The ID with which to identify all resources.
+    vpc -> Object:
+        The VPC Object to which to attach the route table.
+    dry -> Boolean:
+        Whether or not to run as a dry run.
+    """
+
+    for gate in vpc.internet_gateways.all():
+        gateId = gate.id
+
+    rt = vpc.create_route_table(
+        DryRun=dry,
+        TagSpecifications=[
+            {
+                "ResourceType": "route-table",
+                "Tags": [
+                    {
+                        "Key": "Name",
+                        "Value": f"{name}-route-table"
+                    },
+                    {
+                        "Key": "ID",
+                        "Value": id
+                    }
+                ]
+            }
+        ]
+    )
+
+    rt.create_route(
+        DestinationCidr="0.0.0.0/0",
+        GatewayId=gateId,
+        DryRun=dry
+    )
+
+    logging.info("Created Route Table")
+    return
+
+
 def createGateway(name: str, id: str, vpc: object, dry=False):
     """
     The function creates a Internet Gateway, names it as specified 
@@ -306,8 +352,9 @@ def createAmazonMachineImage(name: str, id: str, key: object, vpc: object, scrip
     """
 
     for sg in vpc.security_groups.all():
-        sgId = sg.group_id
-        break
+        if sg.group_name is not "default":
+            sgId = sg.group_id
+            break
 
     for subnet in vpc.subnets.all():
         subnetId = subnet.subnet_id
@@ -374,7 +421,7 @@ def createAmazonMachineImage(name: str, id: str, key: object, vpc: object, scrip
             }
         ]
     )
-    instance.terminate()
+    instance.start()
 
     logging.info("Created AMI")
     return image
@@ -450,16 +497,16 @@ def createLoadBalancer(name: str, id: str, vpc: object, dry=False):
     """
 
     for sg in vpc.security_groups.all():
-        print(sg)
-        secGroup = sg.group_id
-        break
+        if sg.group_name is not "default":
+            secGroup = sg.group_id
+            break
 
     subnetIds = []
     for subnet in vpc.subnets.all():
         subnetIds.append(subnet.subnet_id)
 
     loadBalancer = f"{name}-load-balancer"
-    elb.create_load_balancer(
+    dns = elb.create_load_balancer(
         LoadBalancerName=loadBalancer,
         Listeners=[
             {
@@ -477,8 +524,9 @@ def createLoadBalancer(name: str, id: str, vpc: object, dry=False):
                 "Value": id
             }
         ]
-    )
-    logging.info("Created Load Balancer")
+    )["DNSName"]
+    logging.info(f"Created Load Balancer: {dns}")
+    print(f"Address: {dns}")
     return loadBalancer
 
 
@@ -487,9 +535,9 @@ def createLaunchConfig(name: str, id: str, key: object, vpc: object, image: obje
     """
 
     for sg in vpc.security_groups.all():
-        print(sg)
-        sgId = sg.group_id
-        break
+        if sg.group_name is not "default":
+            sgId = sg.group_id
+            break
 
     launchConfig = f"{name}-launch-config"
     asg.create_launch_configuration(
@@ -586,6 +634,7 @@ def main():
         # and security groups.
         vpc = createVpc(APP_NAME, CREATION_ID, "10.0.0.0/16")
         createGateway(APP_NAME, CREATION_ID, vpc)
+        createRouteTable(APP_NAME, CREATION_ID, vpc)
         createSubnets(APP_NAME, CREATION_ID, vpc)
         createSecurityGroups(APP_NAME, CREATION_ID, vpc)
 
