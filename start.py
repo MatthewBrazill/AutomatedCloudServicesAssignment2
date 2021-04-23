@@ -306,12 +306,10 @@ def createAmazonMachineImage(name: str, id: str, key: object, vpc: object, scrip
     """
 
     for sg in vpc.security_groups.all():
-        print(sg)
         sgId = sg.group_id
         break
 
     for subnet in vpc.subnets.all():
-        print(subnet)
         subnetId = subnet.subnet_id
         break
 
@@ -440,7 +438,7 @@ def createAutoScaler(name: str, id: str, vpc: object, launchConfig: str, loadBal
         MaxSize=10,
         DesiredCapacity=1,
         DefaultCooldown=180,
-        LoadBlancerNames=[loadBalancer]
+        LoadBalancerNames=[loadBalancer]
     )
     logging.info("Created Auto Scaler")
     return autoScaler
@@ -458,7 +456,7 @@ def createLoadBalancer(name: str, id: str, vpc: object, dry=False):
 
     subnetIds = []
     for subnet in vpc.subnets.all():
-        subnetIds.append(subnet)
+        subnetIds.append(subnet.subnet_id)
 
     loadBalancer = f"{name}-load-balancer"
     elb.create_load_balancer(
@@ -469,18 +467,7 @@ def createLoadBalancer(name: str, id: str, vpc: object, dry=False):
                 "LoadBalancerPort": 80,
                 "InstanceProtocol": "HTTP",
                 "InstancePort": 80
-            },
-            {
-                "Protocol": "HTTPS",
-                "LoadBalancerPort": 443,
-                "InstanceProtocol": "HTTPS",
-                "InstancePort": 443
             }
-        ],
-        AvailabilityZones=[
-            "euw1-az-1",
-            "euw1-az-2",
-            "euw1-az-3"
         ],
         Subnets=subnetIds[0:3],
         SecurityGroups=[secGroup],
@@ -498,7 +485,7 @@ def createLoadBalancer(name: str, id: str, vpc: object, dry=False):
 def createLaunchConfig(name: str, id: str, key: object, vpc: object, image: object, dry=False):
     """
     """
-    
+
     for sg in vpc.security_groups.all():
         print(sg)
         sgId = sg.group_id
@@ -516,28 +503,115 @@ def createLaunchConfig(name: str, id: str, key: object, vpc: object, image: obje
     return launchConfig
 
 
+def buildDatabase(name: str, id: str, key: object, vpc: object, script: str, dry=False):
+    return
+
+
+def cleanup(key: object, vpc: object, bucket: object, image: object, launchConfig: str, loadBalancer: str, autoScaler: str):
+    """
+    A function to delete all the created resources.
+
+    key -> Object:
+        The key resource to delete.
+    vpc -> Object:
+        The VPC resource to delete.
+    bucket -> Object:
+        The S3 bucket to delete.
+    image -> Object:
+        The AMI image to delete.
+    launchConfig -> String:
+        The name of the launch configuration to delete.
+    loadBalancer -> String:
+        The name of the load balancer to delete.
+    autoScaler -> String:
+        The name of the auto scaler to delete.
+    """
+
+    if key is not None:
+        key.delete(KeyPairId=key.key_pair_id)
+
+    if vpc is not None:
+        vpc.subnets.all().delete()
+        vpc.security_groups.all().delete()
+        vpc.internet_gateways.all().delete()
+        vpc.delete()
+
+    if bucket is not None:
+        bucket.objects.all().delete()
+        bucket.delete()
+
+    if image is not None:
+        image.deregister()
+
+    if launchConfig is not "":
+        asg.delete_launch_configuration(LaunchConfigurationName=launchConfig)
+
+    if loadBalancer is not "":
+        elb.delete_load_balancer(LoadBalancerName=loadBalancer)
+
+    if autoScaler is not "":
+        asg.update_auto_scaling_group(
+            AutoScalingGroupName=autoScaler,
+            MinSize=0,
+            MaxSize=0,
+            DesiredCapacity=0
+        )
+        asg.delete_auto_scaling_group(
+            AutoScalingGroupName=autoScaler,
+            ForceDelete=True
+        )
+    return
+
+
 # Main
 def main():
     logging.info("Starting Program...")
     logging.info(f"App name set to: {APP_NAME}")
     logging.info(f"ID generated as: {CREATION_ID}")
 
-    key = createKeyPair(APP_NAME, CREATION_ID)
+    # Ensure that variables exist:
+    key = None
+    vpc = None
+    bucket = None
+    image = None
+    launchConfig = ""
+    loadBalancer = ""
+    autoScaler = ""
 
-    vpc = createVpc(APP_NAME, CREATION_ID, "10.0.0.0/16")
-    createGateway(APP_NAME, CREATION_ID, vpc)
-    createSubnets(APP_NAME, CREATION_ID, vpc)
-    createSecurityGroups(APP_NAME, CREATION_ID, vpc)
+    try:
+        # Generate a new Key Pair for this environment.
+        key = createKeyPair(APP_NAME, CREATION_ID)
 
-    bucket = createS3(APP_NAME, CREATION_ID)
+        # Build the VPC along with subnets, gateways
+        # and security groups.
+        vpc = createVpc(APP_NAME, CREATION_ID, "10.0.0.0/16")
+        createGateway(APP_NAME, CREATION_ID, vpc)
+        createSubnets(APP_NAME, CREATION_ID, vpc)
+        createSecurityGroups(APP_NAME, CREATION_ID, vpc)
 
-    script = re.sub("[bucket]", bucket.name, open(f"./scripts/startup.sh", "r").read())
-    logging.info("Script loaded from file: ./scripts/startup.sh")
-    image = createAmazonMachineImage(APP_NAME, CREATION_ID, key, vpc, script)
+        # Create a S3 Bucket to provide a place to resources
+        # for the web app.
+        bucket = createS3(APP_NAME, CREATION_ID)
 
-    launchConfig = createLaunchConfig(APP_NAME, CREATION_ID, key, vpc, image)
-    loadBalancer = createLoadBalancer(APP_NAME, CREATION_ID, vpc)
-    autoScaler = createAutoScaler(APP_NAME, CREATION_ID, vpc, launchConfig, loadBalancer)
+        # Build a EC2 Instance to generate a AMI based on it,
+        # including all necessary configuration.
+        amiScript = re.sub("[bucket]", bucket.name, open(f"./scripts/ami.sh", "r").read())
+        logging.info("Script loaded from file: ./scripts/startup.sh")
+        image = createAmazonMachineImage(APP_NAME, CREATION_ID, key, vpc, amiScript)
+
+        # Create and configure the components for the auto scaling.
+        launchConfig = createLaunchConfig(APP_NAME, CREATION_ID, key, vpc, image)
+        loadBalancer = createLoadBalancer(APP_NAME, CREATION_ID, vpc)
+        autoScaler = createAutoScaler(APP_NAME, CREATION_ID, vpc, launchConfig, loadBalancer)
+
+        # Build a database to access from the web app.
+        databaseScript = re.sub("[bucket]", bucket.name, open(f"./scripts/database.sh", "r").read())
+        buildDatabase(APP_NAME, CREATION_ID, key, vpc, databaseScript)
+
+    except Exception as err:
+        logging.error(f"An error occurred: {err}")
+        logging.info("Attempting cleanup...")
+        cleanup(key, vpc, bucket, image, launchConfig, loadBalancer, autoScaler)
 
 
 if sys.version_info[0] >= 3 and sys.version_info[1] >= 7:
