@@ -525,7 +525,7 @@ def buildDatabase(name: str, id: str, key: object, vpc: object, script: str, dry
     return
 
 
-def cleanup(key: object, vpc: object, bucket: object, image: object, launchConfig: str, loadBalancer: str, autoScaler: str):
+def cleanup(key: object, vpc: object, image: object, launchConfig: str, loadBalancer: str, autoScaler: str):
     """
     A function to delete all the created resources.
 
@@ -553,10 +553,6 @@ def cleanup(key: object, vpc: object, bucket: object, image: object, launchConfi
         vpc.security_groups.all().delete()
         vpc.internet_gateways.all().delete()
         vpc.delete()
-
-    if bucket is not None:
-        bucket.objects.all().delete()
-        bucket.delete()
 
     if image is not None:
         image.deregister()
@@ -626,7 +622,7 @@ def main():
     except Exception as err:
         logging.error(f"An error occurred: {err}")
         logging.info("Attempting cleanup...")
-        cleanup(key, vpc, bucket, image, launchConfig, loadBalancer, autoScaler)
+        cleanup(key, vpc, image, launchConfig, loadBalancer, autoScaler)
 
 
 if sys.version_info[0] >= 3 and sys.version_info[1] >= 7:
