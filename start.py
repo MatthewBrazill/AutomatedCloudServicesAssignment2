@@ -15,7 +15,7 @@ CREATION_ID = str(uuid.uuid4())
 ec2 = boto3.resource("ec2")
 s3 = boto3.resource("s3")
 asg = boto3.client("autoscaling")
-elb = boto3.client("elb")
+elb = boto3.client("elbv2")
 
 
 # Logging Configuration
@@ -28,7 +28,7 @@ logging.basicConfig(
 
 
 # Definitions
-def createKeyPair(name: str, id: str, dry=False):
+def createKeyPair(name: str, id: str, dry=False) -> object:
     """
     Creates an EC2 Key Pair and saves it as a file accessable to the user.
 
@@ -36,6 +36,8 @@ def createKeyPair(name: str, id: str, dry=False):
         The name to be given to the Key.
     id -> String:
         The ID with which to identify all resources.
+    dry -> Boolean:
+        Whether or not to run as a dry run.
     """
 
     logging.info("Creating Key Pair...")
@@ -72,9 +74,9 @@ def createVpc(name: str, id: str, cidr: str, dry=False) -> object:
         The name to be given to the VPC.
     id -> String:
         The ID with which to identify all resources.
-    cidr -> String: 
+    cidr -> String:
         The CIDR block with which to create the VPC.
-    dry -> Boolean: 
+    dry -> Boolean:
         Whether or not to run as a dry run.
     """
 
@@ -101,12 +103,12 @@ def createVpc(name: str, id: str, cidr: str, dry=False) -> object:
     return vpc
 
 
-def createRouteTable(name: str, id: str, vpc: object, dry=False):
+def createRouteTable(name: str, id: str, vpc: object, dry=False) -> object:
     """
     Creates a route table for the specified VPC.
 
     name -> String:
-        The name to be given to the route table. 
+        The name to be given to the route table.
     id -> String:
         The ID with which to identify all resources.
     vpc -> Object:
@@ -118,7 +120,12 @@ def createRouteTable(name: str, id: str, vpc: object, dry=False):
     for gate in vpc.internet_gateways.all():
         gateId = gate.id
 
-    rt = vpc.create_route_table(
+    for route in vpc.route_tables.all():
+        rt = route
+
+    rt.create_route(
+        DestinationCidrBlock="0.0.0.0/0",
+        GatewayId=gateId,
         DryRun=dry,
         TagSpecifications=[
             {
@@ -137,23 +144,17 @@ def createRouteTable(name: str, id: str, vpc: object, dry=False):
         ]
     )
 
-    rt.create_route(
-        DestinationCidrBlock="0.0.0.0/0",
-        GatewayId=gateId,
-        DryRun=dry
-    )
-
     logging.info("Created Route Table")
-    return
+    return rt
 
 
-def createGateway(name: str, id: str, vpc: object, dry=False):
+def createGateway(name: str, id: str, vpc: object, dry=False) -> object:
     """
-    The function creates a Internet Gateway, names it as specified 
+    The function creates a Internet Gateway, names it as specified
     and then attaches it to the given VPC.
 
     name -> String:
-        The name to be given to the gatway. 
+        The name to be given to the gatway.
     id -> String:
         The ID with which to identify all resources.
     vpc -> Object:
@@ -189,13 +190,13 @@ def createGateway(name: str, id: str, vpc: object, dry=False):
     return gateway
 
 
-def createSubnets(name: str, id: str, vpc: object, dry=False):
+def createSubnets(name: str, id: str, vpc: object, dry=False) -> object:
     """
     The function creates Subnets and names them as specified.
 
     name -> String:
-        The name to be given to the subnet. They will be given the 
-        postfix 'Private Subnet-a', with the letter indicating the 
+        The name to be given to the subnet. They will be given the
+        postfix 'Private Subnet-a', with the letter indicating the
         avalability zone.
     id -> String:
         The ID with which to identify all resources.
@@ -220,7 +221,7 @@ def createSubnets(name: str, id: str, vpc: object, dry=False):
                     "Tags": [
                         {
                             "Key": "Name",
-                            "Value": f"{name} Public Subnet-{i+1}"
+                            "Value": f"{name}-public-subnet-{i+1}"
                         },
                         {
                             "Key": "ID",
@@ -241,7 +242,7 @@ def createSubnets(name: str, id: str, vpc: object, dry=False):
                     "Tags": [
                         {
                             "Key": "Name",
-                            "Value": f"{name} Private Subnet-{i+1}"
+                            "Value": f"{name}-private-subnet-{i+1}"
                         },
                         {
                             "Key": "ID",
@@ -255,7 +256,7 @@ def createSubnets(name: str, id: str, vpc: object, dry=False):
     return subnets
 
 
-def createSecurityGroups(name: str, id: str, vpc: object, dry=False):
+def createSecurityGroups(name: str, id: str, vpc: object, dry=False) -> object:
     """
     The function creates a Security Group and names it as specified.
 
@@ -332,200 +333,205 @@ def createSecurityGroups(name: str, id: str, vpc: object, dry=False):
     return sg
 
 
-def createAmazonMachineImage(name: str, id: str, key: object, vpc: object, script: str, dry=False):
+def createTargetGroup(name: str, id: str, vpc: object, dry=False) -> dict:
     """
-    This function creates a AMI based of off a EC2 instance that is created
-    and then terminated.
+    This function creates a Target Group referencing all public EC2 instances.
 
     name -> String:
-        The name to be given to the AMI.
+        The name to be given to the Auto Scaler.
     id -> String:
         The ID with which to identify all resources.
-    key -> Object:
-        The Pey Pair with which to create the AMI.
     vpc -> Object:
-        The VPC Object within which to create the AMI.
-    script -> String:
-        The startup script to pass on to the AMI that is executed at the 
-        start of the instances launch.
+        The VPC Object whose instances to reference.
+    """
+
+    targetGroup = elb.create_target_group(
+        Name=f"{name}-target-group",
+        Protocol="HTTP",
+        Port=80,
+        VpcId=vpc.vpc_id,
+        TargetType="instance",
+        Tags=[
+            {
+                "Key": "Name",
+                "Value": f"{name}-gateway"
+            },
+            {
+                "Key": "ID",
+                "Value": id
+            }
+        ]
+    )["TargetGroups"][0]
+    return targetGroup
+
+
+def createAutoScaler(name: str, id: str, vpc: object, launchConfig: str, targetGroup: dict, dry=False) -> str:
+    """
+    This function creates an Auto Scaler based of off a EC2 Launch Configuration.
+
+    name -> String:
+        The name to be given to the Auto Scaler.
+    id -> String:
+        The ID with which to identify all resources.
+    vpc -> Object:
+        The VPC Object within which to create the Auto Scaler.
+    launchCongif -> String:
+        The name of the Launch Configuration on which the scaled resources will be based.
+    targetGroup -> String:
+        The name of the Target Group that represents the
     dry -> Boolean:
         Whether or not to run as a dry run.
-    """
-
-    for sg in vpc.security_groups.all():
-        if sg.group_name is not "default":
-            sgId = sg.group_id
-            break
-
-    for subnet in vpc.subnets.all():
-        subnetId = subnet.subnet_id
-        break
-
-    logging.info("Creating AMI base Instance...")
-    instance = ec2.create_instances(
-        ImageId="ami-096f43ef67d75e998",
-        InstanceType="t2.nano",
-        KeyName=key.key_name,
-        MaxCount=1,
-        MinCount=1,
-        Monitoring={
-            "Enabled": False
-        },
-        SecurityGroupIds=[sgId],
-        SubnetId=subnetId,
-        UserData=script,
-        DisableApiTermination=False,
-        EbsOptimized=False,
-        InstanceInitiatedShutdownBehavior="stop",
-        DryRun=dry,
-        TagSpecifications=[
-            {
-                "ResourceType": "instance",
-                "Tags": [
-                    {
-                        "Key": "Name",
-                        "Value": f"{name}-image-creation-instance"
-                    },
-                    {
-                        "Key": "ID",
-                        "Value": id
-                    }
-                ]
-            }
-        ]
-    )[0]
-
-    # Wait for the server to be running to install the server
-    instance.wait_until_running()
-    subprocess.run(["./scripts/install.sh", f"{key.key_name}.pem", instance.public_ip_address])
-
-    # Stop the instance to create the AMI.
-    instance.stop()
-    instance.wait_until_stopped()
-
-    logging.info("Creating AMI...")
-    image = instance.create_image(
-        Name=f"{name}-load-balancer-image",
-        Description=f"A autogenerated image for {name} that is used by the connected load balancer.",
-        DryRun=dry,
-        TagSpecifications=[
-            {
-                "ResourceType": "image",
-                "Tags": [
-                    {
-                        "Key": "Name",
-                        "Value": f"{name}-base-image"
-                    },
-                    {
-                        "Key": "ID",
-                        "Value": id
-                    }
-                ]
-            }
-        ]
-    )
-    instance.start()
-
-    logging.info("Created AMI")
-    return image
-
-
-def createAutoScaler(name: str, id: str, vpc: object, launchConfig: str, loadBalancer: str, dry=False):
-    """
     """
 
     subnets = ""
     count = 0
     for subnet in vpc.subnets.all():
-        if count <= 1:
-            subnets += f"{subnet.subnet_id}, "
-            count += 1
-        elif count == 2:
-            subnets += f"{subnet.subnet_id}"
-            count += 1
-            break
+        if "public" in subnet.tags[0]["Value"] or "public" in subnet.tags[1]["Value"]:
+            if count <= 1:
+                subnets += f"{subnet.subnet_id}, "
+                count += 1
+            elif count == 2:
+                subnets += f"{subnet.subnet_id}"
+                count += 1
+                break
 
-    autoScaler = f"{name}-auto-scaling-group"
     asg.create_auto_scaling_group(
-        AutoScalingGroupName=autoScaler,
+        AutoScalingGroupName=f"{name}-auto-scaling-group",
         LaunchConfigurationName=launchConfig,
         VPCZoneIdentifier=subnets,
         MinSize=1,
         MaxSize=10,
         DesiredCapacity=1,
         DefaultCooldown=180,
-        LoadBalancerNames=[loadBalancer]
+        TargetGroupARNs=[targetGroup["TargetGroupArn"]],
+        Tags=[
+            {
+                "Key": "Name",
+                "Value": f"{name}-auto-scaling-group"
+            },
+            {
+                "Key": "ID",
+                "Value": id
+            }
+        ]
     )
     logging.info("Created Auto Scaler")
-    return autoScaler
+    return f"{name}-auto-scaling-group"
 
 
-def createLoadBalancer(name: str, id: str, vpc: object, dry=False):
+def createLoadBalancer(name: str, id: str, vpc: object, targetGroup, dry=False) -> dict:
     """
-    Creates a load balancer that is named as specified.    
+    Creates a load balancer that is named as specified.
+
+    name -> String:
+        The name to be given to the Load Balancer.
+    id -> String:
+        The ID with which to identify all resources.
+    vpc -> Object:
+        The VPC Object within which to create the Load Balancer.
+    targetGroup -> String:
+        tr
+    dry -> Boolean:
+        Whether or not to run as a dry run.
     """
 
     for sg in vpc.security_groups.all():
-        if sg.group_name is not "default":
+        if sg.group_name != "default":
             secGroup = sg.group_id
             break
 
     subnetIds = []
     for subnet in vpc.subnets.all():
-        subnetIds.append(subnet.subnet_id)
+        if "public" in subnet.tags[0]["Value"] or "public" in subnet.tags[1]["Value"]:
+            subnetIds.append(subnet.subnet_id)
 
-    loadBalancer = f"{name}-load-balancer"
-    dns = elb.create_load_balancer(
-        LoadBalancerName=loadBalancer,
-        Listeners=[
-            {
-                "Protocol": "HTTP",
-                "LoadBalancerPort": 80,
-                "InstanceProtocol": "HTTP",
-                "InstancePort": 80
-            }
-        ],
-        Subnets=subnetIds[0:3],
+    loadBalancer = elb.create_load_balancer(
+        Name=f"{name}-load-balancer",
+        Subnets=subnetIds,
         SecurityGroups=[secGroup],
+        Type="application",
+        IpAddressType="ipv4",
         Tags=[
             {
                 "Key": "ID",
                 "Value": id
             }
         ]
-    )["DNSName"]
-    logging.info(f"Created Load Balancer: {dns}")
-    print(f"Address: http://{dns}/index")
+    )["LoadBalancers"][0]
+
+    elb.create_listener(
+        LoadBalancerArn=loadBalancer["LoadBalancerArn"],
+        Protocol="HTTP",
+        Port=80,
+        DefaultActions=[
+            {
+                "Type": "forward",
+                "TargetGroupArn": targetGroup["TargetGroupArn"]
+            }
+        ],
+        Tags=[
+            {
+                "Key": "Name",
+                "Value": f"{name}-listener"
+            },
+            {
+                "Key": "ID",
+                "Value": id
+            }
+        ]
+    )
+    logging.info(f"Created Load Balancer: {loadBalancer['DNSName']}")
+    print(f"Address: http://{loadBalancer['DNSName']}/index")
     return loadBalancer
 
 
-def createLaunchConfig(name: str, id: str, key: object, vpc: object, image: object, script, dry=False):
+def createLaunchConfig(name: str, id: str, key: object, vpc: object, script, dry=False) -> str:
     """
+    Creates a launch configuration that is named as specified.
+
+    name -> String:
+        The name to be given to the AMI.
+    id -> String:
+        The ID with which to identify all resources.
+    key -> String:
+        The Pey Pair with which to create the Launch Configuration.
+    vpc -> Object:
+        The VPC Object within which to create the Load Balancer.
+    script -> String:
+        The startup script to pass on to the Launch Configuration
+        that is executed at the start of the instances launch.
+    dry -> Boolean:
+        Whether or not to run as a dry run.
     """
 
     for sg in vpc.security_groups.all():
-        if sg.group_name is not "default":
+        if sg.group_name != "default":
             sgId = sg.group_id
             break
 
-    launchConfig = f"{name}-launch-config"
     asg.create_launch_configuration(
-        LaunchConfigurationName=launchConfig,
-        ImageId=image.image_id,
+        LaunchConfigurationName=f"{name}-launch-config",
+        ImageId="",
         KeyName=key.key_name,
         UserData=script,
         SecurityGroups=[sgId],
-        InstanceType="t2.nano"
+        InstanceType="t2.nano",
+        Tags=[
+            {
+                "Key": "Name",
+                "Value": f"{name}-launch-configuration"
+            },
+            {
+                "Key": "ID",
+                "Value": id
+            }
+        ]
     )
     logging.info("Created Launch Configuration")
-    return launchConfig
+    return f"{name}-launch-config"
 
 
-def buildDatabase(name: str, id: str, key: object, vpc: object, script: str, dry=False):
-    return
-
-
-def cleanup(key: object, vpc: object, image: object, launchConfig: str, loadBalancer: str, autoScaler: str):
+def cleanup(key: object, vpc: object):
     """
     A function to delete all the created resources.
 
@@ -533,48 +539,40 @@ def cleanup(key: object, vpc: object, image: object, launchConfig: str, loadBala
         The key resource to delete.
     vpc -> Object:
         The VPC resource to delete.
-    bucket -> Object:
-        The S3 bucket to delete.
-    image -> Object:
-        The AMI image to delete.
     launchConfig -> String:
         The name of the launch configuration to delete.
-    loadBalancer -> String:
-        The name of the load balancer to delete.
+    targetGroup -> String:
+        The target group to delete.
     autoScaler -> String:
         The name of the auto scaler to delete.
     """
 
-    if key is not None:
-        key.delete(KeyPairId=key.key_pair_id)
+    success = True
+    try:
+        if key != None:
+            key.delete()
 
-    if vpc is not None:
-        vpc.subnets.all().delete()
-        vpc.security_groups.all().delete()
-        vpc.internet_gateways.all().delete()
-        vpc.delete()
+        if vpc != None:
+            for securityGroup in vpc.security_groups.all():
+                if securityGroup.group_name != "default":
+                    securityGroup.delete()
 
-    if image is not None:
-        image.deregister()
+            for gateway in vpc.internet_gateways.all():
+                gateway.detach_from_vpc(VpcId=vpc.vpc_id)
+                gateway.delete()
 
-    if launchConfig is not "":
-        asg.delete_launch_configuration(LaunchConfigurationName=launchConfig)
+            for subnet in vpc.subnets.all():
+                subnet.delete()
 
-    if loadBalancer is not "":
-        elb.delete_load_balancer(LoadBalancerName=loadBalancer)
+            for route in vpc.route_tables.all():
+                if hasattr(route, "tags"):
+                    route.delete()
 
-    if autoScaler is not "":
-        asg.update_auto_scaling_group(
-            AutoScalingGroupName=autoScaler,
-            MinSize=0,
-            MaxSize=0,
-            DesiredCapacity=0
-        )
-        asg.delete_auto_scaling_group(
-            AutoScalingGroupName=autoScaler,
-            ForceDelete=True
-        )
-    return
+            vpc.delete()
+    except Exception:
+        success = False
+
+    return success
 
 
 # Main
@@ -586,8 +584,6 @@ def main():
     # Ensure that variables exist:
     key = None
     vpc = None
-    bucket = None
-    image = None
     launchConfig = ""
     loadBalancer = ""
     autoScaler = ""
@@ -604,25 +600,23 @@ def main():
         createSubnets(APP_NAME, CREATION_ID, vpc)
         createSecurityGroups(APP_NAME, CREATION_ID, vpc)
 
-        # Build a EC2 Instance to generate a AMI based on it,
-        # including all necessary configuration.
-        amiScript = re.sub("[bucket]", bucket.name, open(f"./scripts/ami.sh", "r").read())
-        logging.info("Script loaded from file: ./scripts/startup.sh")
-        image = createAmazonMachineImage(APP_NAME, CREATION_ID, key, vpc, amiScript)
-
         # Create and configure the components for the auto scaling.
-        launchConfig = createLaunchConfig(APP_NAME, CREATION_ID, key, vpc, image)
+        webAppScript = open(f"./scripts/webapp.sh", "r").read()
+        launchConfig = createLaunchConfig(APP_NAME, CREATION_ID, key, vpc, webAppScript)
+        targetGroup = createTargetGroup(APP_NAME, CREATION_ID, vpc)
         loadBalancer = createLoadBalancer(APP_NAME, CREATION_ID, vpc)
-        autoScaler = createAutoScaler(APP_NAME, CREATION_ID, vpc, launchConfig, loadBalancer)
-
-        # Build a database to access from the web app.
-        databaseScript = re.sub("[bucket]", bucket.name, open(f"./scripts/database.sh", "r").read())
-        buildDatabase(APP_NAME, CREATION_ID, key, vpc, databaseScript)
+        autoScaler = createAutoScaler(APP_NAME, CREATION_ID, vpc, launchConfig, targetGroup)
 
     except Exception as err:
         logging.error(f"An error occurred: {err}")
+        print(err)
         logging.info("Attempting cleanup...")
-        cleanup(key, vpc, image, launchConfig, loadBalancer, autoScaler)
+        if cleanup(key, vpc):
+            logging.info("Cleanup Succeeded!")
+            print("Cleanup Succeeded!")
+        else:
+            logging.info("Cleanup Failed! To avoid unexpected costs please check for remaining resources on AWS.")
+            print("Cleanup Failed! To avoid unexpected costs please check for remaining resources on AWS.")
 
 
 if sys.version_info[0] >= 3 and sys.version_info[1] >= 7:
