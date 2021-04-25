@@ -127,21 +127,6 @@ def createRouteTable(name: str, id: str, vpc: object, dry=False) -> object:
         DestinationCidrBlock="0.0.0.0/0",
         GatewayId=gateId,
         DryRun=dry,
-        TagSpecifications=[
-            {
-                "ResourceType": "route-table",
-                "Tags": [
-                    {
-                        "Key": "Name",
-                        "Value": f"{name}-route-table"
-                    },
-                    {
-                        "Key": "ID",
-                        "Value": id
-                    }
-                ]
-            }
-        ]
     )
 
     logging.info("Created Route Table")
@@ -377,8 +362,8 @@ def createAutoScaler(name: str, id: str, vpc: object, launchConfig: str, targetG
         The VPC Object within which to create the Auto Scaler.
     launchCongif -> String:
         The name of the Launch Configuration on which the scaled resources will be based.
-    targetGroup -> String:
-        The name of the Target Group that represents the
+    targetGroup -> Dictionary:
+        The Target Group that represents the scalable instances.
     dry -> Boolean:
         Whether or not to run as a dry run.
     """
@@ -419,7 +404,7 @@ def createAutoScaler(name: str, id: str, vpc: object, launchConfig: str, targetG
     return f"{name}-auto-scaling-group"
 
 
-def createLoadBalancer(name: str, id: str, vpc: object, targetGroup, dry=False) -> dict:
+def createLoadBalancer(name: str, id: str, vpc: object, targetGroup: dict, dry=False) -> dict:
     """
     Creates a load balancer that is named as specified.
 
@@ -429,8 +414,8 @@ def createLoadBalancer(name: str, id: str, vpc: object, targetGroup, dry=False) 
         The ID with which to identify all resources.
     vpc -> Object:
         The VPC Object within which to create the Load Balancer.
-    targetGroup -> String:
-        tr
+    targetGroup -> Dictionary:
+        The target group that the loadbalancer references.
     dry -> Boolean:
         Whether or not to run as a dry run.
     """
@@ -515,23 +500,13 @@ def createLaunchConfig(name: str, id: str, key: object, vpc: object, script, dry
         KeyName=key.key_name,
         UserData=script,
         SecurityGroups=[sgId],
-        InstanceType="t2.nano",
-        Tags=[
-            {
-                "Key": "Name",
-                "Value": f"{name}-launch-configuration"
-            },
-            {
-                "Key": "ID",
-                "Value": id
-            }
-        ]
+        InstanceType="t2.nano"
     )
     logging.info("Created Launch Configuration")
     return f"{name}-launch-config"
 
 
-def cleanup(key: object, vpc: object):
+def cleanup(key: object, vpc: object, launchConfig: str, targetGroup: dict, loadBalancer: dict, autoScaler: str):
     """
     A function to delete all the created resources.
 
@@ -541,8 +516,10 @@ def cleanup(key: object, vpc: object):
         The VPC resource to delete.
     launchConfig -> String:
         The name of the launch configuration to delete.
-    targetGroup -> String:
+    targetGroup -> Dictionary:
         The target group to delete.
+    loadBalancer -> Dictionary:
+        The loadbalancer to delete.
     autoScaler -> String:
         The name of the auto scaler to delete.
     """
@@ -569,6 +546,28 @@ def cleanup(key: object, vpc: object):
                     route.delete()
 
             vpc.delete()
+
+        if loadBalancer != "":
+            elb.delete_load_balancer(
+                LoadBalancerArn=loadBalancer["LoadBalancerArn"]
+            )
+
+        if autoScaler != "":
+            asg.delete_auto_scaling_group(
+                AutoScalingGroupName=autoScaler,
+                ForceDelete=True
+            )
+        
+        if launchConfig != "":
+            asg.delete_launch_configuration(
+                LaunchConfigurationName=launchConfig
+            )
+
+        if targetGroup != "":
+            elb.delete_target_group(
+                TargetGroupArn=targetGroup["TargetGroupArn"]
+            )
+
     except Exception:
         success = False
 
@@ -581,10 +580,11 @@ def main():
     logging.info(f"App name set to: {APP_NAME}")
     logging.info(f"ID generated as: {CREATION_ID}")
 
-    # Ensure that variables exist:
+    # Ensure that variables exist for cleanup:
     key = None
     vpc = None
     launchConfig = ""
+    targetGroup = ""
     loadBalancer = ""
     autoScaler = ""
 
@@ -604,14 +604,14 @@ def main():
         webAppScript = open(f"./scripts/webapp.sh", "r").read()
         launchConfig = createLaunchConfig(APP_NAME, CREATION_ID, key, vpc, webAppScript)
         targetGroup = createTargetGroup(APP_NAME, CREATION_ID, vpc)
-        loadBalancer = createLoadBalancer(APP_NAME, CREATION_ID, vpc)
+        loadBalancer = createLoadBalancer(APP_NAME, CREATION_ID, vpc, targetGroup)
         autoScaler = createAutoScaler(APP_NAME, CREATION_ID, vpc, launchConfig, targetGroup)
 
     except Exception as err:
         logging.error(f"An error occurred: {err}")
         print(err)
         logging.info("Attempting cleanup...")
-        if cleanup(key, vpc):
+        if cleanup(key, vpc, launchConfig, targetGroup, loadBalancer, autoScaler):
             logging.info("Cleanup Succeeded!")
             print("Cleanup Succeeded!")
         else:
