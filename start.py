@@ -511,7 +511,7 @@ def createLaunchConfig(name: str, id: str, key: object, vpc: object, script, dry
 
     asg.create_launch_configuration(
         LaunchConfigurationName=f"{name}-launch-config",
-        ImageId="",
+        ImageId="ami-04d76fb85cd82256b",
         KeyName=key.key_name,
         UserData=script,
         SecurityGroups=[sgId],
